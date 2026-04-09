@@ -57,9 +57,9 @@
         .chat-details { flex: 1; min-width: 0; }
         .chat-name { font-weight: 600; font-size: 15px; }
         .chat-last-msg { font-size: 12px; color: #888; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .chat-menu { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); background: none; border: none; color: #888; cursor: pointer; font-size: 18px; padding: 4px 8px; border-radius: 8px; }
+        .chat-menu { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); background: none; border: none; color: #888; cursor: pointer; font-size: 18px; padding: 4px 8px; border-radius: 8px; z-index: 5; }
         .chat-menu:hover { background: #2a2a2a; color: white; }
-        .dropdown-menu { position: absolute; right: 0; top: 100%; background: #1a1a1a; border-radius: 8px; overflow: hidden; z-index: 10; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+        .dropdown-menu { position: absolute; right: 0; top: 100%; background: #1a1a1a; border-radius: 8px; overflow: hidden; z-index: 20; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
         .dropdown-menu button { display: block; width: 100%; padding: 10px 16px; background: none; border: none; color: white; text-align: left; cursor: pointer; font-size: 13px; }
         .dropdown-menu button:hover { background: #2a2a2a; }
         
@@ -209,7 +209,7 @@
         signInWithPopup
     } from "firebase/auth";
     import { getDatabase, ref, set, update, onValue, off, onDisconnect, get } from "firebase/database";
-    import { getFirestore, doc, getDoc, setDoc, updateDoc, collection, addDoc, onSnapshot, orderBy, query as fsQuery, where, getDocs, deleteDoc, arrayUnion, arrayRemove } from "firebase/firestore";
+    import { getFirestore, doc, getDoc, setDoc, updateDoc, collection, addDoc, onSnapshot, orderBy, query as fsQuery, where, getDocs, deleteDoc } from "firebase/firestore";
     import { getAnalytics } from "firebase/analytics";
 
     const firebaseConfig = {
@@ -246,13 +246,9 @@
     let channels = [];
     let onlineStatuses = new Map();
     let usersCache = new Map();
-    let typingRef = null;
-    let typingTimeout = null;
     let heartbeatInterval = null;
     let unsubscribeMessages = null;
     let unsubscribeChats = null;
-    let unsubscribeGroups = null;
-    let unsubscribeChannels = null;
     let currentSearchType = 'uid';
     
     // WebRTC
@@ -260,6 +256,7 @@
     let localStream = null;
     let currentCallId = null;
     let ringingInterval = null;
+    let callTypeGlobal = null;
     
     const configuration = {
         iceServers: [
@@ -484,7 +481,7 @@
         }
     }
     
-    // ==================== ЛИЧНЫЕ ЧАТЫ ====================
+    // ==================== ЧАТЫ ====================
     function subscribeToChats() {
         if (unsubscribeChats) unsubscribeChats();
         const q = fsQuery(collection(db, 'chats'), where('participants', 'array-contains', currentUser.uid));
@@ -541,13 +538,11 @@
         } catch(err) { console.error(err); throw err; }
     }
     
-    async function deleteChat(chatId, type) {
+    async function deleteChat(chatId) {
         if (!confirm('Удалить этот чат?')) return;
         try {
-            if (type === 'user') {
-                await deleteDoc(doc(db, 'chats', chatId));
-            }
-            if (currentChatId === chatId && currentChatType === type) {
+            await deleteDoc(doc(db, 'chats', chatId));
+            if (currentChatId === chatId) {
                 currentChatId = null;
                 currentChatType = null;
                 currentChatPeerId = null;
@@ -558,9 +553,7 @@
                 document.getElementById('sendBtn').disabled = true;
                 document.getElementById('messagesArea').innerHTML = '<div class="no-items" style="margin-top:60px;">💬 Чат удален</div>';
             }
-        } catch(err) {
-            console.error("Delete error:", err);
-        }
+        } catch(err) { console.error("Delete error:", err); }
     }
     
     // ==================== ОТПРАВКА СООБЩЕНИЙ ====================
@@ -676,13 +669,17 @@
                 e.stopPropagation();
                 const id = btn.dataset.id;
                 const type = btn.dataset.type;
+                if (type !== 'user') {
+                    alert("Только личные чаты можно удалить");
+                    return;
+                }
                 const menu = document.createElement('div');
                 menu.className = 'dropdown-menu';
-                menu.innerHTML = `<button class="delete-chat" data-id="${id}" data-type="${type}">🗑️ Удалить чат</button>`;
+                menu.innerHTML = `<button class="delete-chat" data-id="${id}">🗑️ Удалить чат</button>`;
                 btn.parentElement.appendChild(menu);
                 menu.querySelector('.delete-chat').onclick = async (e2) => {
                     e2.stopPropagation();
-                    await deleteChat(id, type);
+                    await deleteChat(id);
                     menu.remove();
                 };
                 setTimeout(() => {
@@ -802,7 +799,7 @@
         modal.querySelector('#closeProfileBtn').onclick = () => modal.remove();
     }
     
-    // ==================== WEBRTC ЗВОНКИ (УПРОЩЁННЫЕ) ====================
+    // ==================== WEBRTC ЗВОНКИ ====================
     async function startCall(isVideo) {
         if (!currentChatPeerId) {
             alert("Сначала откройте чат с пользователем");
@@ -814,8 +811,6 @@
             alert("Пользователь не в сети");
             return;
         }
-        
-        callType = isVideo ? 'video' : 'audio';
         
         try {
             localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: isVideo });
@@ -848,9 +843,11 @@
                 to: currentChatPeerId,
                 status: 'waiting',
                 offer: { type: offer.type, sdp: offer.sdp },
-                type: callType,
+                type: isVideo ? 'video' : 'audio',
                 time: Date.now()
             });
+            
+            console.log("📞 Звонок отправлен пользователю:", currentChatPeerId);
             
             // Слушаем ответ
             const callRef = ref(rtdb, `calls/${currentCallId}`);
@@ -923,7 +920,6 @@
     
     async function acceptCall(callId, call) {
         currentCallId = callId;
-        callType = call.type;
         
         try {
             localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: call.type === 'video' });
@@ -1014,6 +1010,16 @@
         subscribeToChats();
         listenForCalls();
         
+        // Группы и каналы (заглушки)
+        groups = [
+            { id: 'group1', name: 'Общий чат', type: 'group', members: 42, lastMessage: 'Привет всем!', avatar: null },
+            { id: 'group2', name: 'Разработчики', type: 'group', members: 8, lastMessage: 'Новый релиз!', avatar: null }
+        ];
+        channels = [
+            { id: 'channel1', name: 'Новости Ww', type: 'channel', subscribers: 128, lastPost: 'Добро пожаловать!', avatar: null },
+            { id: 'channel2', name: 'Анонсы', type: 'channel', subscribers: 56, lastPost: 'Скоро обновление', avatar: null }
+        ];
+        
         const searchInput = document.getElementById('searchInput');
         searchInput.addEventListener('input', (e) => renderSearchResults(e.target.value));
         document.getElementById('searchBtn').onclick = () => renderSearchResults(searchInput.value);
@@ -1039,6 +1045,8 @@
                 renderCurrentList();
             };
         });
+        
+        renderCurrentList();
     }
     
     function bindEvents() {
