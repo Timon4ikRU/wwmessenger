@@ -23,9 +23,8 @@
             color: #fff; 
             height: 100vh; 
             overflow: hidden;
-            position: fixed;
             width: 100%;
-            touch-action: pan-x pan-y;
+            position: fixed;
         }
         
         /* Десктоп версия */
@@ -135,9 +134,11 @@
             /* Увеличенная область ввода для мобильных */
             .input-area {
                 padding: 12px 16px !important;
-                padding-bottom: calc(12px + env(safe-area-inset-bottom, 12px)) !important;
                 background: #0e0e0e;
                 border-top: 1px solid #202020;
+                position: sticky;
+                bottom: 0;
+                background: #0e0e0e;
             }
             .message-input {
                 padding: 14px 18px !important;
@@ -150,9 +151,15 @@
                 min-width: 48px !important;
             }
             
-            /* Дополнительный отступ снизу для безопасной зоны */
             .chat-area {
-                padding-bottom: env(safe-area-inset-bottom, 0);
+                display: flex;
+                flex-direction: column;
+                height: 100%;
+            }
+            
+            .messages-area {
+                flex: 1;
+                overflow-y: auto;
             }
         }
         
@@ -247,8 +254,8 @@
         .dropdown-menu button { display: block; width: 100%; padding: 12px 20px; background: none; border: none; color: white; text-align: left; cursor: pointer; font-size: 14px; touch-action: manipulation; }
         .dropdown-menu button:active { background: #2a2a2a; }
         
-        .chat-area { flex: 1; display: flex; flex-direction: column; background: #0a0a0a; position: relative; }
-        .chat-header { padding: 12px 16px; background: #0e0e0e; border-bottom: 1px solid #202020; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .chat-area { flex: 1; display: flex; flex-direction: column; background: #0a0a0a; position: relative; height: 100%; }
+        .chat-header { padding: 12px 16px; background: #0e0e0e; border-bottom: 1px solid #202020; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; flex-shrink: 0; }
         .chat-contact { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
         .chat-contact .avatar { width: 44px; height: 44px; font-size: 20px; }
         .chat-contact .chat-name { font-size: 16px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -266,7 +273,7 @@
         .message-time { font-size: 9px; color: #aaa; margin-top: 4px; text-align: right; }
         .message-sender { font-size: 10px; color: #888; margin-bottom: 4px; }
         
-        /* Увеличенная область ввода сообщения */
+        /* Область ввода - фиксированная внизу */
         .input-area { 
             padding: 12px 16px; 
             background: #0e0e0e; 
@@ -274,6 +281,7 @@
             display: flex; 
             gap: 12px; 
             align-items: center;
+            flex-shrink: 0;
         }
         .message-input { 
             flex: 1; 
@@ -336,21 +344,6 @@
         @media (max-width: 768px) {
             ::-webkit-scrollbar {
                 width: 2px;
-            }
-            
-            /* Дополнительный отступ для безопасной зоны на iPhone */
-            .input-area {
-                padding-bottom: max(12px, env(safe-area-inset-bottom)) !important;
-            }
-        }
-        
-        /* Адаптация под устройства с вырезом (iPhone) */
-        @supports (padding: max(0px)) {
-            .input-area {
-                padding-bottom: max(12px, env(safe-area-inset-bottom));
-            }
-            .chat-header {
-                padding-top: max(12px, env(safe-area-inset-top));
             }
         }
     </style>
@@ -484,6 +477,18 @@
     let unsubscribeGroups = null;
     let unsubscribeChannels = null;
     let currentSearchType = 'uid';
+    
+    // ==================== ФУНКЦИЯ ДЛЯ МОБИЛЬНОЙ КЛАВИАТУРЫ ====================
+    function adjustViewportHeight() {
+        if (window.innerWidth <= 768) {
+            const vh = window.innerHeight * 0.01;
+            document.documentElement.style.setProperty('--vh', `${vh}px`);
+            document.querySelector('.chat-area').style.height = `${window.innerHeight}px`;
+        }
+    }
+    
+    window.addEventListener('resize', adjustViewportHeight);
+    window.addEventListener('orientationchange', adjustViewportHeight);
     
     // ==================== ВСПОМОГАТЕЛЬНЫЕ ====================
     function escapeHtml(str) { if (!str) return ''; return str.replace(/[&<>]/g, m => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;' }[m])); }
@@ -1311,6 +1316,9 @@
         subscribeToChats();
         subscribeToGroups();
         subscribeToChannels();
+        
+        // Адаптация под мобильную клавиатуру
+        adjustViewportHeight();
         
         const searchInput = document.getElementById('searchInput');
         searchInput.addEventListener('input', (e) => renderSearchResults(e.target.value));
