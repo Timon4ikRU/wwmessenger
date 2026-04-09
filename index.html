@@ -179,7 +179,7 @@
                     <div class="peer-status" id="peerStatus">⚪ Выберите чат</div>
                 </div>
             </div>
-            <div class="call-buttons" id="callButtons" style="display: none;">
+            <div class="call-buttons" id="callButtons">
                 <button class="call-btn" id="audioCallBtn" title="Аудиозвонок">🎤</button>
                 <button class="call-btn" id="videoCallBtn" title="Видеозвонок">📹</button>
             </div>
@@ -254,6 +254,7 @@
     let unsubscribeGroups = null;
     let unsubscribeChannels = null;
     let currentSearchType = 'uid';
+    let lastOnlineCheck = 0;
     
     // WebRTC
     let peerConnection = null;
@@ -271,14 +272,6 @@
             { urls: 'stun:stun4.l.google.com:19302' }
         ]
     };
-    
-    // ==================== ЗВУК ====================
-    function playNotification() {
-        try {
-            const audio = new Audio('data:audio/wav;base64,U3RlYWx0aCBhbmQgV2ViQXVkaW8gYXJlIGNvb2whIFRoaXMgaXMgYSBzaW1wbGUgYmVlcCBzb3VuZC4=');
-            audio.play().catch(e => console.log('Audio play failed'));
-        } catch(e) {}
-    }
     
     // ==================== ВСПОМОГАТЕЛЬНЫЕ ====================
     function escapeHtml(str) { if (!str) return ''; return str.replace(/[&<>]/g, m => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;' }[m])); }
@@ -315,11 +308,12 @@
             try {
                 await set(heartbeatRef, { timestamp: Date.now() });
                 await update(ref(rtdb, `users/${currentUser.uid}`), { status: 'online', lastSeen: Date.now() });
+                console.log("❤️ Heartbeat sent");
             } catch(err) { console.warn("Heartbeat error:", err); }
         };
         
         updateOnline();
-        heartbeatInterval = setInterval(updateOnline, 8000);
+        heartbeatInterval = setInterval(updateOnline, 5000);
     }
     
     // ==================== АУТЕНТИФИКАЦИЯ ====================
@@ -454,30 +448,40 @@
         const usersRef = ref(rtdb, 'users');
         onValue(usersRef, (snapshot) => {
             const users = snapshot.val() || {};
+            console.log("📊 Users update:", Object.keys(users).length, "users");
+            
             for (const [uid, data] of Object.entries(users)) {
                 if (uid !== currentUser.uid) {
-                    const isOnline = data.status === 'online' && (Date.now() - (data.lastSeen || 0) < 15000);
+                    const isOnline = data.status === 'online' && (Date.now() - (data.lastSeen || 0) < 10000);
+                    const oldStatus = onlineStatuses.get(uid);
                     onlineStatuses.set(uid, isOnline);
                     usersCache.set(uid, { name: data.name, email: data.email, avatarBase64: data.avatarBase64, bio: data.bio, uid: uid });
+                    
+                    if (oldStatus !== isOnline) {
+                        console.log(`🟢 Пользователь ${uid.substring(0,8)}: ${isOnline ? 'ONLINE' : 'offline'}`);
+                    }
                 }
             }
             renderCurrentList();
-            
-            // Обновляем статус в открытом чате
-            if (currentChatType === 'user' && currentChatPeerId) {
-                const isOnline = onlineStatuses.get(currentChatPeerId) || false;
-                const statusEl = document.getElementById('peerStatus');
-                const callBtns = document.getElementById('callButtons');
-                
-                if (statusEl) {
-                    statusEl.innerHTML = isOnline ? '🟢 В сети' : '⚪ Не в сети';
-                    statusEl.className = isOnline ? 'peer-status online' : 'peer-status offline';
-                }
-                if (callBtns) {
-                    callBtns.style.display = isOnline ? 'flex' : 'none';
-                }
-            }
+            updateCurrentChatStatus();
         });
+    }
+    
+    function updateCurrentChatStatus() {
+        if (currentChatType === 'user' && currentChatPeerId) {
+            const isOnline = onlineStatuses.get(currentChatPeerId) || false;
+            const statusEl = document.getElementById('peerStatus');
+            const callBtns = document.getElementById('callButtons');
+            
+            if (statusEl) {
+                statusEl.innerHTML = isOnline ? '🟢 В сети' : '⚪ Не в сети';
+                statusEl.className = isOnline ? 'peer-status online' : 'peer-status offline';
+            }
+            if (callBtns) {
+                callBtns.style.display = isOnline ? 'flex' : 'flex';
+                console.log(`📞 Кнопки звонка ${isOnline ? 'ПОКАЗАНЫ' : 'показаны но заблокированы'}`);
+            }
+        }
     }
     
     // ==================== ЛИЧНЫЕ ЧАТЫ ====================
@@ -666,7 +670,6 @@
                 document.getElementById('peerStatus').className = 'peer-status';
                 document.getElementById('messageInput').disabled = true;
                 document.getElementById('sendBtn').disabled = true;
-                document.getElementById('callButtons').style.display = 'none';
                 document.getElementById('messagesArea').innerHTML = '<div class="no-items" style="margin-top:60px;">💬 Чат удален</div>';
             }
         } catch(err) {
@@ -704,11 +707,12 @@
         input.value = '';
     }
     
-    function openChat(id, type, name, avatar) {
+    function openChat(id, type, name, avatar, peerId = null) {
         if (unsubscribeMessages) unsubscribeMessages();
         currentChatId = id;
         currentChatType = type;
         currentChatPeerName = name;
+        if (peerId) currentChatPeerId = peerId;
         
         document.getElementById('chatName').innerText = name;
         document.getElementById('chatAvatar').innerHTML = avatar ? `<img src="${avatar}">` : (name?.charAt(0).toUpperCase() || '?');
@@ -718,28 +722,16 @@
         let collectionPath = '';
         if (type === 'user') {
             collectionPath = `chats/${id}/messages`;
-            currentChatPeerId = id;
-            const isOnline = onlineStatuses.get(id) || false;
-            const statusEl = document.getElementById('peerStatus');
-            const callBtns = document.getElementById('callButtons');
-            
-            if (statusEl) {
-                statusEl.innerHTML = isOnline ? '🟢 В сети' : '⚪ Не в сети';
-                statusEl.className = isOnline ? 'peer-status online' : 'peer-status offline';
-            }
-            if (callBtns) {
-                callBtns.style.display = isOnline ? 'flex' : 'none';
-            }
+            // Обновляем статус сразу
+            updateCurrentChatStatus();
         } else if (type === 'group') {
             collectionPath = `groups/${id}/messages`;
             document.getElementById('peerStatus').innerHTML = '👥 Группа';
             document.getElementById('peerStatus').className = 'peer-status';
-            document.getElementById('callButtons').style.display = 'none';
         } else {
             collectionPath = `channels/${id}/posts`;
             document.getElementById('peerStatus').innerHTML = '📢 Канал';
             document.getElementById('peerStatus').className = 'peer-status';
-            document.getElementById('callButtons').style.display = 'none';
         }
         
         const messagesRef = collection(db, collectionPath);
@@ -751,8 +743,8 @@
         });
         
         if (typingRef) off(typingRef);
-        if (type === 'user') {
-            typingRef = ref(rtdb, `typing/${id}/${currentChatPeerId}`);
+        if (type === 'user' && peerId) {
+            typingRef = ref(rtdb, `typing/${id}/${peerId}`);
             onValue(typingRef, (snapshot) => {
                 if (snapshot.val()) {
                     document.getElementById('typingIndicator').style.display = 'block';
@@ -823,7 +815,11 @@
             `;
             div.onclick = (e) => {
                 if (e.target.classList.contains('chat-menu')) return;
-                openChat(item.id, item.type, item.name, item.avatar);
+                if (item.type === 'user') {
+                    openChat(item.id, item.type, item.name, item.avatar, item.peerId);
+                } else {
+                    openChat(item.id, item.type, item.name, item.avatar);
+                }
             };
             container.appendChild(div);
         }
@@ -939,7 +935,7 @@
                     const action = btn.dataset.action;
                     if (action === 'chat') {
                         const chatId = await createOrGetChat(id);
-                        openChat(chatId, 'user', name, avatar);
+                        openChat(chatId, 'user', name, avatar, id);
                     } else if (action === 'join') {
                         await joinGroup(id);
                         alert(`Вы вступили в группу "${name}"`);
@@ -964,7 +960,7 @@
             if (type === 'user') {
                 el.onclick = async () => {
                     const chatId = await createOrGetChat(id);
-                    openChat(chatId, 'user', name, avatar);
+                    openChat(chatId, 'user', name, avatar, id);
                     document.getElementById('searchInput').value = '';
                     container.style.display = 'none';
                 };
@@ -1084,6 +1080,13 @@
             alert("Звонки доступны только в личных чатах");
             return;
         }
+        
+        const isOnline = onlineStatuses.get(currentChatPeerId) || false;
+        if (!isOnline) {
+            alert("Пользователь не в сети");
+            return;
+        }
+        
         if (currentCallId) {
             alert("Уже есть активный звонок");
             return;
@@ -1325,10 +1328,14 @@
             }
         });
         
+        // Кнопки звонков всегда видны, но при нажатии проверяем онлайн статус
         document.getElementById('audioCallBtn').onclick = () => startCall(false);
         document.getElementById('videoCallBtn').onclick = () => startCall(true);
         document.getElementById('createGroupBtn').onclick = showCreateGroupModal;
         document.getElementById('createChannelBtn').onclick = showCreateChannelModal;
+        
+        // Принудительно показываем кнопки звонков
+        document.getElementById('callButtons').style.display = 'flex';
     }
     
     function bindEvents() {
